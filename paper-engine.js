@@ -90,7 +90,7 @@
     if (!qty) { watch.state = "NO_CASH"; return false; }
     const price = fillPrice(item, 0), d = item.domesticTrend || {};
     const position = {
-      ticker:watch.ticker, code:watch.code, name:item.name || watch.name, market:item.market || watch.market,
+      ticker:watch.ticker, code:watch.code, name:watch.name || item.name, market:item.market || watch.market,
       currency:watch.currency, strategy:watch.strategy, qty, unitQty:qty, stage:1, avgPrice:price,
       entryPrice:price, entryDate:item.date, n:number(item.n), nextEntry:number(item.entry1) + .5 * number(item.n),
       stop:watch.strategy === "PULLBACK_KR" ? Math.max(number(d.breakoutLevel), number(item.low)) : price - 2 * number(item.n),
@@ -171,6 +171,16 @@
     return account;
   }
 
+  /** 누락된 거래일을 오래된 날짜부터 재생하며 날짜별 중복 처리는 update가 차단합니다. */
+  function updateHistory(account, items, settings) {
+    const ordered = (items || []).filter(item => item && !item.error && item.date)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.ticker).localeCompare(String(b.ticker)));
+    const byDate = new Map();
+    ordered.forEach(item => { if (!byDate.has(item.date)) byDate.set(item.date, []); byDate.get(item.date).push(item); });
+    byDate.forEach(dayItems => update(account, dayItems, settings));
+    return account;
+  }
+
   function manualExit(account, ticker, price, date) {
     const position = account.positions.find(row => row.ticker === ticker);
     if (!position) return false;
@@ -186,5 +196,5 @@
     return result;
   }
 
-  return { createAccount, normalizeAccount, changeCapital, register, unregister, update, manualExit, valuation, unitQuantity, snapshot };
+  return { createAccount, normalizeAccount, changeCapital, register, unregister, update, updateHistory, manualExit, valuation, unitQuantity, snapshot };
 });
