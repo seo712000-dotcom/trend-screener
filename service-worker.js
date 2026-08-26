@@ -1,4 +1,4 @@
-const CACHE_NAME="trend-screener-v49";
+const CACHE_NAME="trend-screener-v50-rank-and-pattern";
 const APP_SHELL=["./","index.html","paper-engine.js","manifest.json"];
 self.addEventListener("install",event=>event.waitUntil(caches.open(CACHE_NAME).then(cache=>cache.addAll(APP_SHELL)).then(()=>self.skipWaiting())));
 self.addEventListener("activate",event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE_NAME).map(key=>caches.delete(key)))).then(()=>self.clients.claim())));
