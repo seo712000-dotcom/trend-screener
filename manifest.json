@@ -1,0 +1,10 @@
+{
+  "name":"추세종목 발굴 · 가상투자",
+  "short_name":"추세발굴",
+  "description":"터틀 ADX RS 및 국내 20일 신고가 눌림 발굴과 사용자 선택형 가상투자",
+  "start_url":"./index.html",
+  "scope":"./",
+  "display":"standalone",
+  "background_color":"#071018",
+  "theme_color":"#071018"
+}
