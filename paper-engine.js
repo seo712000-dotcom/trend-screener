@@ -14,7 +14,7 @@
 
   function createAccount(krw, usd) {
     return {
-      version: 1,
+      version: 2,
       initialKRW: Math.max(0, number(krw)), initialUSD: Math.max(0, number(usd)),
       cashKRW: Math.max(0, number(krw)), cashUSD: Math.max(0, number(usd)),
       watchlist: [], positions: [], trades: [], updatedAt: new Date().toISOString()
@@ -43,8 +43,8 @@
     const ticker = String(item.ticker || "").toUpperCase();
     if (!ticker) throw new Error("티커가 없습니다.");
     if (account.watchlist.some(row => row.ticker === ticker) || account.positions.some(row => row.ticker === ticker)) return false;
-    const chosenStrategy = strategy || "TURTLE", domestic = item.domesticTrend || {};
-    const signalNow = chosenStrategy === "PULLBACK_KR" ? !!domestic.buyReady : !!item.perfect;
+    const chosenStrategy = strategy || "TURTLE", domestic = item.domesticTrend || {}, kiwoom = item.kiwoomPdf || {};
+    const signalNow = chosenStrategy === "PULLBACK_KR" ? !!domestic.buyReady : chosenStrategy === "KIWOOM_PDF" ? !!kiwoom.allPass : !!item.perfect;
     account.watchlist.push({
       ticker, code: item.code || ticker, name: item.name || ticker, market: item.market || "KR",
       currency: currencyOf(item), strategy: chosenStrategy, state: signalNow ? "PENDING" : "WAITING",
@@ -62,14 +62,15 @@
   }
 
   function snapshot(item) {
-    const d = item.domesticTrend || {};
-    return { price:number(item.price), open:number(item.open), high:number(item.high), low:number(item.low), n:number(item.n), entry1:number(item.entry1), exit1:number(item.exit1), ma5:number(d.ma5), ma10:number(d.ma10), breakoutLevel:number(d.breakoutLevel), phase:item.phase || d.status || "" };
+    const d = item.domesticTrend || {}, k = item.kiwoomPdf || {};
+    return { price:number(item.price), open:number(item.open), high:number(item.high), low:number(item.low), n:number(item.n), entry1:number(item.entry1), exit1:number(item.exit1), ma5:number(d.ma5), ma10:number(d.ma10), breakoutLevel:number(d.breakoutLevel), kiwoomPass:!!k.allPass, phase:item.phase || d.status || k.status || "" };
   }
 
   function unitQuantity(account, item, riskPct) {
     const currency = currencyOf(item), capital = number(account[initialKey(currency)]), n = number(item.n), price = number(item.price);
     if (!capital || !n || !price) return 0;
-    const riskQty = Math.floor(capital * Math.max(.001, number(riskPct) || 1) / 100 / n);
+    // 위험금액 = 수량 × 손절폭(2N)이므로 1 Unit도 2N 기준으로 계산한다.
+    const riskQty = Math.floor(capital * Math.max(.001, number(riskPct) || 1) / 100 / (2 * n));
     return Math.max(0, Math.min(riskQty, Math.floor(number(account[cashKey(currency)]) / price)));
   }
 
@@ -89,14 +90,15 @@
     const qty = unitQuantity(account, item, settings.riskPct);
     if (!qty) { watch.state = "NO_CASH"; return false; }
     const price = fillPrice(item, 0), d = item.domesticTrend || {};
+    const isPullback = watch.strategy === "PULLBACK_KR", isKiwoom = watch.strategy === "KIWOOM_PDF";
     const position = {
       ticker:watch.ticker, code:watch.code, name:watch.name || item.name, market:item.market || watch.market,
       currency:watch.currency, strategy:watch.strategy, qty, unitQty:qty, stage:1, avgPrice:price,
-      entryPrice:price, entryDate:item.date, n:number(item.n), nextEntry:number(item.entry1) + .5 * number(item.n),
-      stop:watch.strategy === "PULLBACK_KR" ? Math.max(number(d.breakoutLevel), number(item.low)) : price - 2 * number(item.n),
+      entryPrice:price, entryDate:item.date, n:number(item.n), nextEntry:isKiwoom ? price + number(item.n) : number(item.entry1) + .5 * number(item.n),
+      stop:isPullback ? Math.max(number(d.breakoutLevel), number(item.low)) : price - 2 * number(item.n),
       breakoutLevel:number(d.breakoutLevel), partialTaken:false, lastDate:item.date, lastPrice:number(item.price)
     };
-    addTrade(account, position, "BUY", qty, price, watch.strategy === "PULLBACK_KR" ? "눌림 매수 신호 다음 시가" : "터틀 돌파 신호 다음 시가", item.date);
+    addTrade(account, position, "BUY", qty, price, isPullback ? "눌림 매수 신호 다음 시가" : isKiwoom ? "PDF 조건 충족 다음 시가" : "터틀 돌파 신호 다음 시가", item.date);
     account.positions.push(position);
     return true;
   }
@@ -145,16 +147,37 @@
     position.lastPrice = close; position.lastDate = item.date;
   }
 
+  function updateKiwoom(account, position, item) {
+    const open = number(item.open) || number(item.price), low = number(item.low) || number(item.price), high = number(item.high) || number(item.price);
+    const exitLine = number(item.exit1), stop = number(position.stop);
+    if (stop && low <= stop) {
+      exitPosition(account, position, position.qty, open < stop ? open : stop, "-2N 통합 손절", item.date); return;
+    }
+    if (exitLine && low <= exitLine) {
+      exitPosition(account, position, position.qty, open < exitLine ? open : exitLine, "10일 최저가 청산", item.date); return;
+    }
+    while (position.stage < 5 && high >= position.nextEntry) {
+      const price = fillPrice(item, position.nextEntry), affordable = Math.floor(number(account[cashKey(position.currency)]) / price);
+      const qty = Math.min(position.unitQty, affordable);
+      if (!qty) break;
+      const oldAmount = position.avgPrice * position.qty;
+      addTrade(account, position, "BUY", qty, price, `${position.stage + 1}차 +1N 추가매수`, item.date);
+      position.qty += qty; position.stage += 1; position.avgPrice = (oldAmount + price * qty) / position.qty;
+      position.n = number(item.n) || position.n; position.stop = price - 2 * position.n; position.nextEntry = price + position.n;
+    }
+    position.lastPrice = number(item.price); position.lastDate = item.date;
+  }
+
   function update(account, items, settings) {
     const map = Object.fromEntries((items || []).filter(item => item && !item.error).map(item => [String(item.ticker).toUpperCase(), item]));
     const entered = [];
     account.watchlist.forEach(watch => {
       const item = map[watch.ticker]; if (!item || !item.date || item.date <= (watch.lastDate || "")) return;
-      const d = item.domesticTrend || {};
+      const d = item.domesticTrend || {}, k = item.kiwoomPdf || {};
       if (watch.state === "PENDING") {
         if (item.date > watch.signalDate && enter(account, watch, item, settings)) entered.push(watch.ticker);
       } else {
-        const signal = watch.strategy === "PULLBACK_KR" ? d.buyReady : item.perfect;
+        const signal = watch.strategy === "PULLBACK_KR" ? d.buyReady : watch.strategy === "KIWOOM_PDF" ? k.allPass : item.perfect;
         if (signal) { watch.state = "PENDING"; watch.signalDate = item.date; }
       }
       watch.lastDate = item.date; watch.snapshot = snapshot(item);
@@ -164,6 +187,7 @@
       const item = map[position.ticker];
       if (!item || !item.date || item.date <= (position.lastDate || "")) return;
       if (position.strategy === "PULLBACK_KR") updatePullback(account, position, item);
+      else if (position.strategy === "KIWOOM_PDF") updateKiwoom(account, position, item);
       else updateTurtle(account, position, item);
     });
     account.positions = account.positions.filter(position => position.qty > 0);
