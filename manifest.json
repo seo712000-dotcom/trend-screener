@@ -1,7 +1,7 @@
 {
   "name":"추세종목 발굴 · 가상투자",
   "short_name":"추세발굴",
-  "description":"KB증권 국내 일봉 기반 코스피200·코스닥150 발굴, 키움 HTS 터틀(PDF), 나스닥100과 사용자 선택형 가상투자",
+  "description":"KB증권 국내 일봉 기반 종목발굴, 키움 HTS 터틀(PDF), 나스닥100, 컴퓨터·휴대폰 자동 동기화 가상투자",
   "start_url":"./index.html",
   "scope":"./",
   "display":"standalone",
