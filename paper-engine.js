@@ -26,8 +26,31 @@
     return Object.assign(base, source, {
       watchlist: Array.isArray(source.watchlist) ? source.watchlist : [],
       positions: Array.isArray(source.positions) ? source.positions : [],
-      trades: Array.isArray(source.trades) ? source.trades : []
+      trades: normalizeTrades(source.trades)
     });
+  }
+
+  function normalizeTrades(trades) {
+    const rows = (Array.isArray(trades) ? trades : []).map(row => Object.assign({}, row));
+    const lots = {};
+    rows.slice().reverse().forEach(trade => {
+      const key = `${trade.currency || "KRW"}:${String(trade.ticker || "").toUpperCase()}`;
+      const lot = lots[key] || (lots[key] = { qty: 0, cost: 0 });
+      const qty = roundQty(trade.qty), price = number(trade.price);
+      if (trade.side === "BUY") {
+        lot.qty += qty; lot.cost += qty * price;
+        if (trade.realizedPnl === undefined) trade.realizedPnl = null;
+        return;
+      }
+      if (trade.side !== "SELL") return;
+      const storedAvg = number(trade.avgPrice), hasBasis = lot.qty > 0 || storedAvg > 0;
+      const avgPrice = lot.qty > 0 ? lot.cost / lot.qty : storedAvg;
+      if (trade.realizedPnl === undefined || trade.realizedPnl === null) trade.realizedPnl = hasBasis ? (price - avgPrice) * qty : null;
+      const soldQty = Math.min(qty, lot.qty);
+      lot.cost = Math.max(0, lot.cost - avgPrice * soldQty);
+      lot.qty = Math.max(0, lot.qty - soldQty);
+    });
+    return rows;
   }
 
   function changeCapital(account, krw, usd) {
@@ -80,9 +103,9 @@
   }
 
   function addTrade(account, position, side, qty, price, reason, date) {
-    const amount = qty * price, currency = position.currency, key = cashKey(currency);
+    const amount = qty * price, currency = position.currency, key = cashKey(currency), avgPrice = number(position.avgPrice);
     account[key] += side === "BUY" ? -amount : amount;
-    account.trades.unshift({ id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`, date:date || today(), ticker:position.ticker, name:position.name, strategy:position.strategy, side, qty, price, amount, currency, reason });
+    account.trades.unshift({ id: `${Date.now()}-${Math.random().toString(36).slice(2,8)}`, date:date || today(), ticker:position.ticker, code:position.code, name:position.name, market:position.market, strategy:position.strategy, side, qty, price, amount, currency, avgPrice, realizedPnl:side === "SELL" ? (price - avgPrice) * qty : null, reason });
     account.trades = account.trades.slice(0, 500);
   }
 
