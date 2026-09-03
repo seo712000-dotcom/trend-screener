@@ -24,8 +24,8 @@
   function normalizeAccount(raw, krw, usd) {
     const base = createAccount(krw, usd), source = raw && typeof raw === "object" ? raw : {};
     return Object.assign(base, source, {
-      watchlist: Array.isArray(source.watchlist) ? source.watchlist : [],
-      positions: Array.isArray(source.positions) ? source.positions : [],
+      watchlist: (Array.isArray(source.watchlist) ? source.watchlist : []).map(row => Object.assign({}, row, { autoTrade:row.autoTrade === true })),
+      positions: (Array.isArray(source.positions) ? source.positions : []).map(row => Object.assign({}, row, { autoTrade:row.autoTrade === true })),
       trades: normalizeTrades(source.trades)
     });
   }
@@ -71,7 +71,7 @@
     account.watchlist.push({
       ticker, code: item.code || ticker, name: item.name || ticker, market: item.market || "KR",
       currency: currencyOf(item), strategy: chosenStrategy, state: signalNow ? "PENDING" : "WAITING",
-      registeredDate: item.date || today(), signalDate: signalNow ? item.date : "", lastDate: item.date || "", snapshot: snapshot(item)
+      autoTrade:false, registeredDate: item.date || today(), signalDate: signalNow ? item.date : "", lastDate: item.date || "", snapshot: snapshot(item)
     });
     account.updatedAt = new Date().toISOString();
     return true;
@@ -117,6 +117,7 @@
     const position = {
       ticker:watch.ticker, code:watch.code, name:watch.name || item.name, market:item.market || watch.market,
       currency:watch.currency, strategy:watch.strategy, qty, unitQty:qty, stage:1, avgPrice:price,
+      autoTrade:watch.autoTrade === true,
       entryPrice:price, entryDate:item.date, n:number(item.n), nextEntry:isKiwoom ? price + number(item.n) : number(item.entry1) + .5 * number(item.n),
       stop:isPullback ? Math.max(number(d.breakoutLevel), number(item.low)) : price - 2 * number(item.n),
       breakoutLevel:number(d.breakoutLevel), partialTaken:false, lastDate:item.date, lastPrice:number(item.price)
@@ -197,11 +198,13 @@
     account.watchlist.forEach(watch => {
       const item = map[watch.ticker]; if (!item || !item.date || item.date <= (watch.lastDate || "")) return;
       const d = item.domesticTrend || {}, k = item.kiwoomPdf || {};
-      if (watch.state === "PENDING") {
-        if (item.date > watch.signalDate && enter(account, watch, item, settings)) entered.push(watch.ticker);
-      } else {
-        const signal = watch.strategy === "PULLBACK_KR" ? d.buyReady : watch.strategy === "KIWOOM_PDF" ? k.allPass : item.perfect;
-        if (signal) { watch.state = "PENDING"; watch.signalDate = item.date; }
+      if (watch.autoTrade === true) {
+        if (watch.state === "PENDING") {
+          if (item.date > watch.signalDate && enter(account, watch, item, settings)) entered.push(watch.ticker);
+        } else {
+          const signal = watch.strategy === "PULLBACK_KR" ? d.buyReady : watch.strategy === "KIWOOM_PDF" ? k.allPass : item.perfect;
+          if (signal) { watch.state = "PENDING"; watch.signalDate = item.date; }
+        }
       }
       watch.lastDate = item.date; watch.snapshot = snapshot(item);
     });
@@ -209,9 +212,13 @@
     account.positions.slice().forEach(position => {
       const item = map[position.ticker];
       if (!item || !item.date || item.date <= (position.lastDate || "")) return;
-      if (position.strategy === "PULLBACK_KR") updatePullback(account, position, item);
-      else if (position.strategy === "KIWOOM_PDF") updateKiwoom(account, position, item);
-      else updateTurtle(account, position, item);
+      if (position.autoTrade === true) {
+        if (position.strategy === "PULLBACK_KR") updatePullback(account, position, item);
+        else if (position.strategy === "KIWOOM_PDF") updateKiwoom(account, position, item);
+        else updateTurtle(account, position, item);
+      } else {
+        position.lastPrice = number(item.price); position.lastDate = item.date;
+      }
     });
     account.positions = account.positions.filter(position => position.qty > 0);
     account.updatedAt = new Date().toISOString();
@@ -236,6 +243,64 @@
     return true;
   }
 
+  function setAutoTrade(account, ticker, enabled) {
+    const target = account.watchlist.find(row => row.ticker === ticker) || account.positions.find(row => row.ticker === ticker);
+    if (!target) return false;
+    target.autoTrade = enabled === true;
+    if (account.watchlist.includes(target) && target.autoTrade) {
+      target.state = "WAITING"; target.signalDate = "";
+    }
+    account.updatedAt = new Date().toISOString();
+    return true;
+  }
+
+  function manualBuy(account, ticker, priceValue, qtyValue, date) {
+    const price = number(priceValue), qty = roundQty(qtyValue);
+    if (!price || !qty) throw new Error("체결가와 수량을 확인하세요.");
+    let position = account.positions.find(row => row.ticker === ticker);
+    const watch = account.watchlist.find(row => row.ticker === ticker);
+    const source = position || watch;
+    if (!source) throw new Error("등록된 종목을 찾을 수 없습니다.");
+    const currency = source.currency || currencyOf(source), available = Math.floor(number(account[cashKey(currency)]) / price);
+    if (qty > available) throw new Error("가상 현금이 부족합니다.");
+    if (!position) {
+      const snap = watch.snapshot || {}, n = number(snap.n), isPullback = watch.strategy === "PULLBACK_KR", isKiwoom = watch.strategy === "KIWOOM_PDF";
+      position = {
+        ticker:watch.ticker, code:watch.code, name:watch.name, market:watch.market, currency, strategy:watch.strategy,
+        autoTrade:false, qty, unitQty:qty, stage:1, avgPrice:price, entryPrice:price, entryDate:date || today(), n,
+        nextEntry:isKiwoom ? price + n : isPullback ? 0 : price + .5 * n,
+        stop:isPullback ? Math.max(number(snap.breakoutLevel), number(snap.low)) : price - 2 * n,
+        breakoutLevel:number(snap.breakoutLevel), partialTaken:false, lastDate:date || today(), lastPrice:price
+      };
+      addTrade(account, position, "BUY", qty, price, "사용자 수동 매수", date || today());
+      account.positions.push(position);
+      account.watchlist = account.watchlist.filter(row => row.ticker !== ticker);
+    } else {
+      const oldAmount = position.avgPrice * position.qty;
+      addTrade(account, position, "BUY", qty, price, "사용자 수동 추가매수", date || today());
+      position.qty += qty;
+      position.avgPrice = (oldAmount + price * qty) / position.qty;
+      if (position.strategy !== "PULLBACK_KR") position.stage = Math.min(position.strategy === "KIWOOM_PDF" ? 5 : 4, number(position.stage) + 1);
+      if (position.n) {
+        position.stop = Math.max(number(position.stop), price - 2 * position.n);
+        position.nextEntry = price + (position.strategy === "KIWOOM_PDF" ? 1 : .5) * position.n;
+      }
+      position.lastPrice = price; position.lastDate = date || today();
+    }
+    account.updatedAt = new Date().toISOString();
+    return position;
+  }
+
+  function manualSell(account, ticker, priceValue, qtyValue, date) {
+    const position = account.positions.find(row => row.ticker === ticker), price = number(priceValue), qty = roundQty(qtyValue);
+    if (!position) throw new Error("보유 종목을 찾을 수 없습니다.");
+    if (!price || !qty || qty > position.qty) throw new Error("체결가와 매도수량을 확인하세요.");
+    exitPosition(account, position, qty, price, "사용자 수동 매도", date || today());
+    account.positions = account.positions.filter(row => row.qty > 0);
+    account.updatedAt = new Date().toISOString();
+    return true;
+  }
+
   function valuation(account) {
     const result = { KRW:{initial:number(account.initialKRW),cash:number(account.cashKRW),market:0,total:0,pnl:0}, USD:{initial:number(account.initialUSD),cash:number(account.cashUSD),market:0,total:0,pnl:0} };
     account.positions.forEach(position => { result[position.currency].market += position.qty * number(position.lastPrice || position.avgPrice); });
@@ -243,5 +308,5 @@
     return result;
   }
 
-  return { createAccount, normalizeAccount, changeCapital, register, unregister, update, updateHistory, manualExit, valuation, unitQuantity, snapshot };
+  return { createAccount, normalizeAccount, changeCapital, register, unregister, update, updateHistory, manualExit, manualBuy, manualSell, setAutoTrade, valuation, unitQuantity, snapshot };
 });
