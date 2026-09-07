@@ -71,7 +71,7 @@
     account.watchlist.push({
       ticker, code: item.code || ticker, name: item.name || ticker, market: item.market || "KR",
       currency: currencyOf(item), strategy: chosenStrategy, state: signalNow ? "PENDING" : "WAITING",
-      autoTrade:false, registeredDate: item.date || today(), signalDate: signalNow ? item.date : "", lastDate: item.date || "", snapshot: snapshot(item)
+      autoTrade:false, currentSignal:signalNow ? "매수 신호" : "관찰", registeredDate: item.date || today(), signalDate: signalNow ? item.date : "", lastDate: item.date || "", snapshot: snapshot(item)
     });
     account.updatedAt = new Date().toISOString();
     return true;
@@ -117,7 +117,7 @@
     const position = {
       ticker:watch.ticker, code:watch.code, name:watch.name || item.name, market:item.market || watch.market,
       currency:watch.currency, strategy:watch.strategy, qty, unitQty:qty, stage:1, avgPrice:price,
-      autoTrade:watch.autoTrade === true,
+      autoTrade:watch.autoTrade === true, currentSignal:"매수 완료", trendExitPending:false,
       entryPrice:price, entryDate:item.date, n:number(item.n), nextEntry:isKiwoom ? price + number(item.n) : number(item.entry1) + .5 * number(item.n),
       stop:isPullback ? Math.max(number(d.breakoutLevel), number(item.low)) : price - 2 * number(item.n),
       breakoutLevel:number(d.breakoutLevel), partialTaken:false, lastDate:item.date, lastPrice:number(item.price)
@@ -134,15 +134,75 @@
     position.qty -= sellQty; position.lastPrice = price; position.lastDate = date;
   }
 
+  function rejectionCandle(item, line) {
+    const open = number(item.open), high = number(item.high), low = number(item.low), close = number(item.price), range = high - low;
+    const wickRatio = range > 0 ? (Math.min(open, close) - low) / range : 0;
+    const closeLocation = range > 0 ? (close - low) / range : 0;
+    return { breached:line > 0 && low <= line, recovered:line > 0 && close >= line, wickRatio, closeLocation, rejection:line > 0 && low <= line && close >= line && wickRatio >= .35 && closeLocation >= .6 };
+  }
+
+  function handleTrendExit(account, position, item, exitLine) {
+    if (!exitLine) return false;
+    const close = number(item.price), candle = rejectionCandle(item, exitLine);
+    position.exitLine = exitLine;
+    if (position.trendExitPending) {
+      if (close < exitLine) {
+        position.currentSignal = "전량 매도 완료";
+        exitPosition(account, position, position.qty, close, "10일선 다음 날 미회복 전량 청산", item.date);
+      } else {
+        position.trendExitPending = false;
+        position.currentSignal = candle.rejection ? "꼬리반등·보유" : "추세회복·보유";
+        position.signalNote = candle.rejection ? `아래꼬리 ${Math.round(candle.wickRatio*100)}% · 종가위치 ${Math.round(candle.closeLocation*100)}%` : "10일 청산선 종가 회복";
+        position.lastPrice = close; position.lastDate = item.date;
+      }
+      return true;
+    }
+    if (close < exitLine) {
+      const qty = Math.max(1, Math.floor(position.qty / 2));
+      exitPosition(account, position, qty, close, "10일선 종가 이탈 50% 축소", item.date);
+      if (position.qty > 0) {
+        position.trendExitPending = true;
+        position.currentSignal = "청산 확인 대기";
+        position.signalNote = "다음 거래일 종가가 10일 청산선을 회복하지 못하면 전량 청산";
+      }
+      return true;
+    }
+    if (candle.breached) {
+      position.currentSignal = candle.rejection ? "꼬리반등·보유" : "청산선 회복·보유";
+      position.signalNote = candle.rejection ? `아래꼬리 ${Math.round(candle.wickRatio*100)}% · 종가위치 ${Math.round(candle.closeLocation*100)}%` : "장중 이탈 후 종가 회복";
+      position.lastPrice = close; position.lastDate = item.date;
+      return true;
+    }
+    return false;
+  }
+
+  function positionSignal(position, item) {
+    const d = item.domesticTrend || {}, open = number(item.open) || number(item.price), high = number(item.high) || number(item.price), low = number(item.low) || number(item.price), close = number(item.price);
+    const stop = number(position.stop), exitLine = number(item.exit1), n = number(position.n) || number(item.n);
+    if (stop && low <= stop) return { text:"손절 신호", note:`-2N 손절선 ${stop}` };
+    if (position.strategy === "PULLBACK_KR") {
+      if (number(d.ma10) && close < number(d.ma10)) return { text:"전량 매도 신호", note:"종가가 10일선 아래" };
+      if (!position.partialTaken && close > position.avgPrice && number(d.ma5) && close < number(d.ma5)) return { text:"50% 익절 신호", note:"수익 구간에서 5일선 이탈" };
+    } else {
+      const candle = rejectionCandle({ open, high, low, price:close }, exitLine);
+      if (position.trendExitPending) return close < exitLine ? { text:"전량 매도 신호", note:"10일 청산선 다음 날 미회복" } : { text:candle.rejection ? "꼬리반등·보유" : "추세회복·보유", note:"10일 청산선 회복" };
+      if (exitLine && close < exitLine) return { text:"50% 축소 신호", note:"10일 청산선 아래 종가 마감" };
+      if (candle.breached) return { text:candle.rejection ? "꼬리반등·보유" : "청산선 회복·보유", note:candle.rejection ? `아래꼬리 ${Math.round(candle.wickRatio*100)}%` : "장중 이탈 후 종가 회복" };
+      const maxStage = position.strategy === "KIWOOM_PDF" ? 5 : 4;
+      if (position.stage < maxStage && number(position.nextEntry) && high >= number(position.nextEntry)) return { text:"추가매수 신호", note:`다음 진입가 ${position.nextEntry}` };
+    }
+    if (n && close >= number(position.avgPrice) + 2 * n) return { text:"익절권·추세보유", note:"평균가 대비 +2N 이상 · 자동 익절은 하지 않음" };
+    return { text:"보유", note:"손절·청산 조건 미충족" };
+  }
+
   function updateTurtle(account, position, item) {
     const open = number(item.open) || number(item.price), low = number(item.low) || number(item.price), high = number(item.high) || number(item.price);
     const exitLine = number(item.exit1), stop = number(position.stop);
     if (stop && low <= stop) {
       exitPosition(account, position, position.qty, open < stop ? open : stop, "-2N 통합 손절", item.date); return;
     }
-    if (exitLine && low <= exitLine) {
-      exitPosition(account, position, position.qty, open < exitLine ? open : exitLine, "10일 최저가 청산", item.date); return;
-    }
+    if (handleTrendExit(account, position, item, exitLine)) return;
+    let added = false;
     while (position.stage < 4 && high >= position.nextEntry) {
       const price = fillPrice(item, position.nextEntry), affordable = Math.floor(number(account[cashKey(position.currency)]) / price);
       const qty = Math.min(position.unitQty, affordable);
@@ -151,7 +211,9 @@
       addTrade(account, position, "BUY", qty, price, `${position.stage + 1}차 +0.5N 추가매수`, item.date);
       position.qty += qty; position.stage += 1; position.avgPrice = (oldAmount + price * qty) / position.qty;
       position.stop = price - 2 * position.n; position.nextEntry += .5 * position.n;
+      added = true;
     }
+    const signal = positionSignal(position, item); position.currentSignal = added ? "추가매수 완료" : signal.text; position.signalNote = added ? `${position.stage}차 진입 완료` : signal.note;
     position.lastPrice = number(item.price); position.lastDate = item.date;
   }
 
@@ -163,11 +225,15 @@
     if (number(d.ma10) && close < number(d.ma10)) {
       exitPosition(account, position, position.qty, close, "10일선 이탈 전량 청산", item.date); return;
     }
+    let tookProfit = false;
     if (!position.partialTaken && close > position.avgPrice && number(d.ma5) && close < number(d.ma5)) {
       const qty = Math.max(1, Math.floor(position.qty / 2));
       exitPosition(account, position, qty, close, "5일선 이탈 50% 익절", item.date);
       position.partialTaken = true;
+      position.currentSignal = "50% 익절 완료"; position.signalNote = "수익 구간에서 5일선 이탈";
+      tookProfit = true;
     }
+    if (!tookProfit) { const signal = positionSignal(position, item); position.currentSignal = signal.text; position.signalNote = signal.note; }
     position.lastPrice = close; position.lastDate = item.date;
   }
 
@@ -177,9 +243,8 @@
     if (stop && low <= stop) {
       exitPosition(account, position, position.qty, open < stop ? open : stop, "-2N 통합 손절", item.date); return;
     }
-    if (exitLine && low <= exitLine) {
-      exitPosition(account, position, position.qty, open < exitLine ? open : exitLine, "10일 최저가 청산", item.date); return;
-    }
+    if (handleTrendExit(account, position, item, exitLine)) return;
+    let added = false;
     while (position.stage < 5 && high >= position.nextEntry) {
       const price = fillPrice(item, position.nextEntry), affordable = Math.floor(number(account[cashKey(position.currency)]) / price);
       const qty = Math.min(position.unitQty, affordable);
@@ -188,7 +253,9 @@
       addTrade(account, position, "BUY", qty, price, `${position.stage + 1}차 +1N 추가매수`, item.date);
       position.qty += qty; position.stage += 1; position.avgPrice = (oldAmount + price * qty) / position.qty;
       position.n = number(item.n) || position.n; position.stop = price - 2 * position.n; position.nextEntry = price + position.n;
+      added = true;
     }
+    const signal = positionSignal(position, item); position.currentSignal = added ? "추가매수 완료" : signal.text; position.signalNote = added ? `${position.stage}차 진입 완료` : signal.note;
     position.lastPrice = number(item.price); position.lastDate = item.date;
   }
 
@@ -198,14 +265,15 @@
     account.watchlist.forEach(watch => {
       const item = map[watch.ticker]; if (!item || !item.date || item.date <= (watch.lastDate || "")) return;
       const d = item.domesticTrend || {}, k = item.kiwoomPdf || {};
+      const signal = watch.strategy === "PULLBACK_KR" ? d.buyReady : watch.strategy === "KIWOOM_PDF" ? k.allPass : item.perfect;
       if (watch.autoTrade === true) {
         if (watch.state === "PENDING") {
           if (item.date > watch.signalDate && enter(account, watch, item, settings)) entered.push(watch.ticker);
         } else {
-          const signal = watch.strategy === "PULLBACK_KR" ? d.buyReady : watch.strategy === "KIWOOM_PDF" ? k.allPass : item.perfect;
           if (signal) { watch.state = "PENDING"; watch.signalDate = item.date; }
         }
       }
+      watch.currentSignal = watch.autoTrade === true ? (watch.state === "PENDING" ? "매수 예약" : "관찰") : (signal ? "매수 신호" : "관찰");
       watch.lastDate = item.date; watch.snapshot = snapshot(item);
     });
     if (entered.length) account.watchlist = account.watchlist.filter(row => !entered.includes(row.ticker));
@@ -217,6 +285,7 @@
         else if (position.strategy === "KIWOOM_PDF") updateKiwoom(account, position, item);
         else updateTurtle(account, position, item);
       } else {
+        const signal = positionSignal(position, item); position.currentSignal = signal.text; position.signalNote = signal.note;
         position.lastPrice = number(item.price); position.lastDate = item.date;
       }
     });
@@ -248,7 +317,7 @@
     if (!target) return false;
     target.autoTrade = enabled === true;
     if (account.watchlist.includes(target) && target.autoTrade) {
-      target.state = "WAITING"; target.signalDate = "";
+      target.state = "WAITING"; target.signalDate = ""; target.currentSignal = "관찰";
     }
     account.updatedAt = new Date().toISOString();
     return true;
@@ -267,7 +336,7 @@
       const snap = watch.snapshot || {}, n = number(snap.n), isPullback = watch.strategy === "PULLBACK_KR", isKiwoom = watch.strategy === "KIWOOM_PDF";
       position = {
         ticker:watch.ticker, code:watch.code, name:watch.name, market:watch.market, currency, strategy:watch.strategy,
-        autoTrade:false, qty, unitQty:qty, stage:1, avgPrice:price, entryPrice:price, entryDate:date || today(), n,
+        autoTrade:false, currentSignal:"수동 매수 완료", trendExitPending:false, qty, unitQty:qty, stage:1, avgPrice:price, entryPrice:price, entryDate:date || today(), n,
         nextEntry:isKiwoom ? price + n : isPullback ? 0 : price + .5 * n,
         stop:isPullback ? Math.max(number(snap.breakoutLevel), number(snap.low)) : price - 2 * n,
         breakoutLevel:number(snap.breakoutLevel), partialTaken:false, lastDate:date || today(), lastPrice:price
@@ -285,6 +354,7 @@
         position.stop = Math.max(number(position.stop), price - 2 * position.n);
         position.nextEntry = price + (position.strategy === "KIWOOM_PDF" ? 1 : .5) * position.n;
       }
+      position.currentSignal = "수동 추가매수 완료"; position.signalNote = `${qty}주 직접 체결`;
       position.lastPrice = price; position.lastDate = date || today();
     }
     account.updatedAt = new Date().toISOString();
@@ -296,6 +366,7 @@
     if (!position) throw new Error("보유 종목을 찾을 수 없습니다.");
     if (!price || !qty || qty > position.qty) throw new Error("체결가와 매도수량을 확인하세요.");
     exitPosition(account, position, qty, price, "사용자 수동 매도", date || today());
+    if (position.qty > 0) { position.currentSignal = "수동 부분매도 완료"; position.signalNote = `${qty}주 직접 매도`; }
     account.positions = account.positions.filter(row => row.qty > 0);
     account.updatedAt = new Date().toISOString();
     return true;
