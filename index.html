@@ -20,7 +20,7 @@
 <header><div class="top"><div class="brand"><strong>추세종목 발굴 · 가상투자</strong><span>포트폴리오 앱과 분리된 조회·모의매매 전용 앱</span></div><nav><button class="tab active" data-view="krTop">코스피 TOP20</button><button class="tab" data-view="krPattern">국장 조건</button><button class="tab" data-view="usTop">나스닥 TOP20</button><button class="tab" data-view="usPattern">미장 조건</button><button class="tab" data-view="discover">터틀·스윙</button><button class="tab" data-view="paper">가상투자</button><button class="tab" data-view="trades">거래내역</button><button class="tab" data-view="settings">연결</button><a class="btn" href="https://seo712000-dotcom.github.io/portfolio-dashboard/" target="_blank" rel="noopener">포트폴리오 앱</a></nav></div></header>
 <main>
   <section class="view" id="krTopView">
-    <section class="panel"><div class="panel-head"><div><h2>코스피200 퀀트 TOP20</h2><div class="hint" id="krTopProgress">가치 25% · 품질 25% · 성장 20% · 모멘텀 20% · 안정성 10%</div></div><button class="btn primary" id="scanKrTop">분석 시작</button></div><div class="notice">신뢰도 80% 이상만 TOP20에 포함하며 분석 결과는 연결된 컴퓨터와 휴대폰에 동기화됩니다.</div></section>
+    <section class="panel"><div class="panel-head"><div><h2>코스피200 퀀트 TOP20</h2><div class="hint" id="krTopProgress">가치 25% · 품질 25% · 성장 20% · 모멘텀 20% · 안정성 10%</div></div><div class="actions"><button class="btn" id="retryQuantPerformance">자동분석 재시도</button><button class="btn primary" id="scanKrTop">화면 분석</button></div></div><div class="notice" id="quantAutomationStatus">매주 첫 거래일 장 마감 후 TOP20을 자동 저장하고 20·60·120거래일 성과를 검증합니다. 화면 분석 버튼을 누를 필요가 없습니다.</div></section>
     <section class="summary" id="krTopSummary"></section><section class="panel"><div class="table-wrap"><table><thead><tr><th>순위</th><th>종목</th><th>종합</th><th>가치</th><th>품질</th><th>성장</th><th>모멘텀</th><th>안정성</th><th>신뢰도</th><th>PER</th><th>PBR</th><th>ROE</th><th>EPS성장</th><th>6개월</th><th>MDD</th><th>가상등록</th></tr></thead><tbody id="krTopRows"></tbody></table></div></section>
   </section>
   <section class="view" id="krPatternView" hidden>
@@ -107,7 +107,7 @@
   async function decodeSyncState(data,encoding){let bytes=base64UrlToBytes(data);if(encoding==="gzip"){if(typeof DecompressionStream!=="function")throw new Error("이 브라우저는 압축 동기화를 지원하지 않습니다.");const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));bytes=new Uint8Array(await new Response(stream).arrayBuffer())}return JSON.parse(new TextDecoder().decode(bytes))}
   async function pullDeviceState(){const prep=await api({action:"syncPreparePull",key:ensureSyncKey(),gzip:typeof DecompressionStream==="function"?1:0},90000);if(!prep.ok)throw new Error(prep.error||"동기화 자료 준비 실패");if(prep.empty)return{revision:Number(prep.revision)||0,updatedAt:prep.updatedAt||"",state:null};let encoded="";for(let index=0;index<Number(prep.chunks);index++){setDeviceSyncState(`동기화 내려받는 중 · ${index+1}/${prep.chunks}`);const part=await api({action:"syncPullChunk",key:ensureSyncKey(),token:prep.token,index},30000);if(!part.ok)throw new Error(part.error||"동기화 자료 내려받기 실패");encoded+=part.data}return{revision:Number(prep.revision)||0,updatedAt:prep.updatedAt||"",state:await decodeSyncState(encoded,prep.encoding)}}
   async function pushDeviceState(baseRevision){const state=buildSyncState(),pushedSerial=syncMutationSerial,encoded=await encodeSyncState(state),chunks=[];for(let i=0;i<encoded.data.length;i+=SYNC_TRANSFER_CHUNK)chunks.push(encoded.data.slice(i,i+SYNC_TRANSFER_CHUNK));if(!chunks.length)chunks.push("");const session=(crypto.randomUUID?crypto.randomUUID().replace(/-/g,""):`${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`).slice(0,64);let result;for(let index=0;index<chunks.length;index++){setDeviceSyncState(`동기화 올리는 중 · ${index+1}/${chunks.length}`);result=await api({action:"syncPushChunk",key:ensureSyncKey(),session,index,total:chunks.length,data:chunks[index],encoding:encoded.encoding,baseRevision},60000);if(!result.ok)throw new Error(result.error||"동기화 자료 올리기 실패");if(result.retryFrom!==undefined)throw new Error("동기화 조각이 누락되었습니다. 다시 시도하세요.")}return{...result,pushedSerial}}
-  function finishDeviceSync(updatedAt,options){syncControl.everSynced=true;syncControl.lastSyncedAt=updatedAt||syncControl.lastSyncedAt||new Date().toISOString();syncControl.lastError="";persistSyncControl();setDeviceSyncState(`동기화 완료 · ${new Date(syncControl.lastSyncedAt).toLocaleString("ko-KR")} · 화면 v57.4`);if(!options.silent)toast("컴퓨터·휴대폰 동기화 완료")}
+  function finishDeviceSync(updatedAt,options){syncControl.everSynced=true;syncControl.lastSyncedAt=updatedAt||syncControl.lastSyncedAt||new Date().toISOString();syncControl.lastError="";persistSyncControl();setDeviceSyncState(`동기화 완료 · ${new Date(syncControl.lastSyncedAt).toLocaleString("ko-KR")} · 화면 v58.1`);if(!options.silent)toast("컴퓨터·휴대폰 동기화 완료")}
   function acceptSuccessfulPush(saved){syncControl.revision=Number(saved.revision)||syncControl.revision;syncControl.everSynced=true;syncControl.lastSyncedAt=saved.updatedAt||new Date().toISOString();if(syncMutationSerial===saved.pushedSerial)syncPending=false}
   async function syncNow(options={}){
     if(!config.apiUrl){if(!options.silent)toast("Apps Script 주소를 먼저 저장하세요.");return}
@@ -115,7 +115,7 @@
     syncRunning=true;
     let succeeded=false;
     const startSerial=syncMutationSerial;
-    setDeviceSyncState("동기화 연결 확인 중… · 화면 v57.4");
+    setDeviceSyncState("동기화 연결 확인 중… · 화면 v58.1");
     try{
       ensureSyncKey();
       const meta=await api({action:"syncMeta",key:config.syncKey},30000);
@@ -128,7 +128,7 @@
         }else{finishDeviceSync(meta.updatedAt,options);succeeded=true;return}
       }
       if(meta.empty){
-        if(!hasLocalUserData()&&!syncPending){setDeviceSyncState("공통 저장소 비어 있음 · 기존 자료가 있는 PC에서 먼저 열어주세요 · 화면 v57.4");succeeded=true;return}
+        if(!hasLocalUserData()&&!syncPending){setDeviceSyncState("공통 저장소 비어 있음 · 기존 자료가 있는 PC에서 먼저 열어주세요 · 화면 v58.1");succeeded=true;return}
         if(!Object.keys(syncControl.categoryTimes||{}).length)stampAllCategories();
         const saved=await pushDeviceState(Number(meta.revision)||0);
         if(saved.conflict)throw new Error("다른 기기의 변경을 확인했습니다. 지금 동기화를 다시 눌러주세요.");
@@ -152,7 +152,7 @@
       syncControl.lastError=String(error&&error.message||error);
       persistSyncControl();
       clearTimeout(syncTimer);
-      setDeviceSyncState(`동기화 실패 · ${syncControl.lastError} · 지금 동기화를 다시 눌러 재시도하세요. · 화면 v57.4`);
+      setDeviceSyncState(`동기화 실패 · ${syncControl.lastError} · 지금 동기화를 다시 눌러 재시도하세요. · 화면 v58.1`);
       toast(syncControl.lastError)
     }finally{
       syncRunning=false;
@@ -186,6 +186,31 @@
   function renderUsTop(){const valid=usRank.rows.filter(x=>!x.error),ranked=valid.map(item=>({item,score:technicalScore(item)})).sort((a,b)=>b.score.total-a.score.total).slice(0,20),avg=ranked.length?Math.round(ranked.reduce((s,x)=>s+x.score.total,0)/ranked.length):0;$("usTopSummary").innerHTML=[["분석 종목",valid.length+"개"],["TOP20 평균",avg+"점"],["6개월 상승",valid.filter(x=>Number(x.mom6)>0).length+"개"],["저위험 후보",valid.filter(x=>Number(x.mdd)>=-25&&Number(x.volatility)<55).length+"개"]].map(x=>`<article class="card"><span>${x[0]}</span><strong>${x[1]}</strong></article>`).join("");$("usTopRows").innerHTML=ranked.map(({item,score},i)=>`<tr><td>${i+1}</td><td>${stock(item)}</td><td>${scoreCell(score.total)}</td><td>${score.trend}</td><td>${score.momentum}</td><td>${score.volume}</td><td>${score.stability}</td><td>${score.confidence}%</td><td>${price(item.price,item)}</td><td>${fmt1(item.mom1,"%")}</td><td>${fmt1(item.mom6,"%")}</td><td>${fmt1(item.volatility,"%")}</td><td>${fmt1(item.mdd,"%")}</td><td>${paperButtons(item,false)}</td></tr>`).join("")||empty(14);$("usTopProgress").textContent=`${usRank.rows.length}/${usRank.total||102} · 유효 ${valid.length} · TOP ${ranked.length}`;$("scanUsTop").disabled=usRank.running;$("scanUsTop").textContent=usRank.running?"분석 중…":usRank.next>=usRank.total&&usRank.total?"다시 분석":usRank.next?"이어 분석":"분석 시작";$("usExtra").value=usExtra.join(", ");renderUsPattern()}
   function renderUsPattern(){const selected=$("usPatternFilter").value,evaluated=usRank.rows.filter(x=>!x.error).map(item=>({item,p:pattern(item),score:technicalScore(item)})),labels=renderPatternSummary("usPatternSummary",evaluated),candidates=evaluated.filter(x=>patternMatch(x.p,selected)&&!x.p.risk).sort((a,b)=>Object.values(b.p.flags).filter(Boolean).length-Object.values(a.p.flags).filter(Boolean).length||b.score.total-a.score.total);$("usPatternRows").innerHTML=candidates.map(({item,p},i)=>`<tr><td>${i+1}</td><td>${stock(item)}</td><td>${Object.entries(p.flags).filter(x=>x[1]).map(x=>badge(labels[x[0]])).join(" ")}</td><td>${badge(p.box.label)}<br><span class="market">${Number.isFinite(p.box.position)?p.box.position.toFixed(0)+"%":"-"}</span></td><td>${price(item.price,item)}</td><td>${fmt1(item.mom1,"%")}</td><td>${fmt1(item.mom6,"%")}</td><td>${fmt1(item.boxRange60,"%")}</td><td>${price(item.boxLow60,item)}</td><td>${price(item.boxHigh60,item)}</td><td>${fmt1(item.ma20Gap,"%")}</td><td>${fmt1(item.ma60Gap,"%")}</td><td>${fmt1(item.rsi)}</td><td>${fmt1(item.volumeRatio,"%")}</td><td>${fmt1(item.mdd,"%")}</td><td>${paperButtons(item,false)}</td></tr>`).join("")||empty(16);$("usPatternNote").textContent=`${evaluated.length}/${usRank.total||102}종목 분석 · 조건 통과 ${candidates.length}개 · 추가 종목 포함`}
   async function scanRank(kind,reset=false){const state=kind==="KR"?krRank:usRank;if(state.running)return;if(reset||state.next>=state.total&&state.total){state.rows=[];state.next=0;state.total=kind==="KR"?200:102+usExtra.length}state.running=true;kind==="KR"?renderKrTop():renderUsTop();try{do{const data=await api({action:kind==="KR"?"kospi200Batch":"nasdaq100Batch",start:state.next,count:5,extra:usExtra.join(",")});if(!data.ok)throw new Error(data.error||"분석 실패");state.rows.push(...(data.rows||[]));state.next=data.next;state.total=data.total;save(kind==="KR"?"krRankScanV56":"usRankScanV50",{...state,running:false});kind==="KR"?renderKrTop():renderUsTop();if(data.done)break}while(state.next<state.total)}catch(e){toast(e.message)}finally{state.running=false;save(kind==="KR"?"krRankScanV56":"usRankScanV50",state);kind==="KR"?renderKrTop():renderUsTop()}}
+  function quantAutomationText(data){
+    if(!data||!data.ok)return `자동 성과분석 오류 · ${data&&data.error||"상태 확인 실패"}`;
+    if(data.enabled===false)return "자동화 미설치 · 종목발굴 Apps Script에서 setupQuantPerformanceAutomation을 한 번 실행하세요.";
+    if(data.status==="queued")return "자동 분석 재시도 예약됨 · 장 마감 후 서버에서 실행됩니다.";
+    if(data.skipped)return data.reason||"다음 거래일 대기";
+    if(data.status==="running")return `자동 성과분석 진행 중 · ${Number(data.next)||0}/${Number(data.total)||200}종목`;
+    if(data.latestCohort)return `최근 자동 저장 ${data.latestCohort} · TOP${data.savedRows||20} · 포트폴리오 앱에서 성과 확인`;
+    return "자동화 설치됨 · 이번 주 마감 자료 대기";
+  }
+  async function loadQuantAutomationStatus(){
+    if(!config.apiUrl)return;
+    try{const data=await api({action:"quantPerformanceStatus"},20000);$("quantAutomationStatus").textContent=quantAutomationText(data)}
+    catch(error){$("quantAutomationStatus").textContent=`자동 성과분석 상태 확인 실패 · ${error.message}`}
+  }
+  async function retryQuantPerformance(){
+    const button=$("retryQuantPerformance");button.disabled=true;
+    $("quantAutomationStatus").textContent="자동분석 재시도를 예약하는 중…";
+    try{
+      const data=await api({action:"quantPerformanceRun",key:ensureSyncKey()},20000);
+      $("quantAutomationStatus").textContent=quantAutomationText(data);
+      if(!data.ok)throw new Error(data.error||"자동 분석 예약 실패");
+      toast("재시도를 예약했습니다. 앱을 닫아도 서버에서 실행됩니다.");
+    }catch(error){$("quantAutomationStatus").textContent=`자동 분석 예약 실패 · ${error.message}`;toast(error.message)}
+    finally{button.disabled=false}
+  }
   function pass(item){const us=item.market==="US",caps=us?{LOW:1e9,MID:5e9,HIGH:1e10}:{LOW:3e11,MID:5e11,HIGH:1e12},turns=us?{LOW:1e7,MID:3e7,HIGH:5e7}:{LOW:3e9,MID:5e9,HIGH:1e10};return(settings.capFilter==="0"||Number(item.marketCap)>=caps[settings.capFilter])&&(settings.turnFilter==="0"||Number(item.avgTurnover20)>=turns[settings.turnFilter])}
   function sorted(rows){return [...rows].sort((a,b)=>settings.sort==="RS"?(b.rsScore||0)-(a.rsScore||0):settings.sort==="ADX"?b.adx-a.adx:settings.sort==="TURN"?b.avgTurnover20-a.avgTurnover20:signalRank(a)-signalRank(b))}
   function signalRank(item){if(settings.strategy==="PULLBACK_KR"){const s=item.domesticTrend&&item.domesticTrend.status;return s==="매수 조건 충족"?0:s==="수급 동반 신고가"?1:s==="눌림 대기"?2:3}if(settings.strategy==="KIWOOM_PDF"){const k=item.kiwoomPdf||{};return k.allPass?0:k.high55?1:k.high21?2:3}return item.perfect?0:item.near?1:item.uptrend?2:3}
@@ -229,7 +254,7 @@
   function restoreUi(){Object.entries({strategy:"strategy",universe:"universe",minAdx:"minAdx",extra:"extra",capFilter:"capFilter",turnFilter:"turnFilter",sort:"sort"}).forEach(([k,id])=>$(id).value=settings[k]);$("apiUrl").value=config.apiUrl||"";renderKrTop();renderUsTop();renderDiscover();renderPaper();renderTrades()}
   document.querySelectorAll(".tab").forEach(btn=>btn.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===btn));document.querySelectorAll(".view").forEach(v=>v.hidden=v.id!==btn.dataset.view+"View");if(btn.dataset.view==="paper")autoRefreshPaper()});
   ["strategy","universe","minAdx","extra","capFilter","turnFilter","sort"].forEach(id=>$(id).onchange=renderDiscover);$("startScan").onclick=startScan;$("resetScan").onclick=()=>{scan={rows:[],next:0,total:0,running:false,signature:""};save("trendScanV56",scan);renderDiscover()};
-  $("scanKrTop").onclick=()=>scanRank("KR");$("scanKrPattern").onclick=()=>scanRank("KR",true);$("krPatternFilter").onchange=renderKrPattern;
+  $("scanKrTop").onclick=()=>scanRank("KR");$("retryQuantPerformance").onclick=retryQuantPerformance;$("scanKrPattern").onclick=()=>scanRank("KR",true);$("krPatternFilter").onchange=renderKrPattern;
   $("scanUsTop").onclick=()=>scanRank("US");$("scanUsPattern").onclick=()=>scanRank("US",true);$("usPatternFilter").onchange=renderUsPattern;
   $("saveUsExtra").onclick=()=>{usExtra=[...new Set($("usExtra").value.toUpperCase().split(/[\s,;]+/).filter(x=>/^[A-Z0-9][A-Z0-9.-]{0,11}$/.test(x)))].slice(0,20);save("usRankExtraV50",usExtra);usRank={rows:[],next:0,total:102+usExtra.length,running:false};save("usRankScanV50",usRank);renderUsTop();toast(`추가 종목 ${usExtra.length}개 저장`)};
   document.querySelector("main").addEventListener("click",e=>{const b=e.target.closest("[data-rank-paper]");if(b)registerRankPaper(b.dataset.rankPaper,b.dataset.rankStrategy)});
@@ -242,6 +267,7 @@
   $("resetPaper").onclick=()=>{if(confirm("가상원금·선택종목·거래내역을 모두 초기화할까요?")){paper=PaperEngine.createAccount(Number($("krCapital").value)||50000000,Number($("usCapital").value)||10000);savePaper()}};
   $("syncNow").onclick=()=>syncNow();$("copyPairLink").onclick=copyPairingLink;
   $("saveConfig").onclick=async()=>{config.apiUrl=$("apiUrl").value.trim();ensureSyncKey();save("trendConfigV49",config);try{const data=await api({action:"health"},20000);$("connectionState").textContent=data.ok?`연결 정상 · 전용 백엔드 v${data.version} · ${data.kbConfigured?"KB 연결":"KB 미설정(대체 데이터 사용)"} · ${data.deviceSync?"기기 동기화 지원":"동기화 미지원"}`:"연결 오류";if(data.ok&&data.deviceSync)await syncNow()}catch(e){$("connectionState").textContent=e.message}};
-  restoreUi();syncReady=true;setTimeout(async()=>{if(config.apiUrl)await syncNow({silent:true});autoRefreshPaper()},800);setInterval(()=>{if(document.visibilityState==="visible")syncNow({silent:true})},30000);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible")syncNow({silent:true})});if("serviceWorker"in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("service-worker.js").catch(()=>{});
+  setInterval(()=>{if(document.visibilityState==="visible")loadQuantAutomationStatus()},60000);
+  restoreUi();syncReady=true;setTimeout(async()=>{if(config.apiUrl)await syncNow({silent:true});loadQuantAutomationStatus();autoRefreshPaper()},800);setInterval(()=>{if(document.visibilityState==="visible")syncNow({silent:true})},30000);document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"){syncNow({silent:true});loadQuantAutomationStatus()}});if("serviceWorker"in navigator&&location.protocol.startsWith("http"))navigator.serviceWorker.register("service-worker.js").catch(()=>{});
 </script>
 </body></html>
